@@ -17,10 +17,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ANDROID_BUNDLE: "14.5.1"
   DESKTOP_BUNDLE: "15.0.24"
   SNOWFLAKE: "v2.14.1"
   CONJURE: "v0.0.0-20260113185639-0090962226b8"
+  LYREBIRD: "v0.0.0-20260115133752-0b10edbb61e0"
 
 jobs:
   android:
@@ -41,30 +41,22 @@ jobs:
             readelf -lW "$so" | awk '$1=="LOAD"{print $NF}' | grep -qv 0x4000 && { echo "::error::$abi tor is not 16 KB aligned"; exit 1; } || true
           done
 
-      - name: lyrebird from the official Android bundle
-        run: |
-          set -e
-          for pair in "aarch64 arm64-v8a" "armv7 armeabi-v7a" "x86_64 x86_64"; do
-            set -- $pair
-            rm -rf teb && mkdir teb
-            curl -fsSL --retry 3 "https://archive.torproject.org/tor-package-archive/torbrowser/${ANDROID_BUNDLE}/tor-expert-bundle-android-$1-${ANDROID_BUNDLE}.tar.gz" | tar -xz -C teb
-            cp teb/tor/pluggable_transports/lyrebird "out/$2/libobfs4proxy.so"
-          done
-
-      - name: Conjure and Snowflake built for every ABI
+      - name: lyrebird, Conjure and Snowflake built for every ABI
         run: |
           set -e
           NDK=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)
           BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
           src() { go mod download -json "$1@$2" | python3 -c 'import sys, json; print(json.load(sys.stdin)["Dir"])'; }
+          LYREBIRD_DIR=$(src gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird "$LYREBIRD")
           CONJURE_DIR=$(src gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/conjure "$CONJURE")
           SNOWFLAKE_DIR=$(src gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2 "$SNOWFLAKE")
-          [ -d "$CONJURE_DIR/client" ] && [ -d "$SNOWFLAKE_DIR/client" ] || { echo "::error::conjure or snowflake did not come through the Go module proxy"; exit 1; }
+          [ -d "$LYREBIRD_DIR/cmd/lyrebird" ] && [ -d "$CONJURE_DIR/client" ] && [ -d "$SNOWFLAKE_DIR/client" ] || { echo "::error::a transport did not come through the Go module proxy"; exit 1; }
           for triple in "arm64:arm64-v8a:aarch64-linux-android24-clang" \
                         "arm:armeabi-v7a:armv7a-linux-androideabi24-clang" \
                         "amd64:x86_64:x86_64-linux-android24-clang"; do
             arch=${triple%%:*}; rest=${triple#*:}; abi=${rest%%:*}; cc=${rest#*:}
             export CGO_ENABLED=1 CC="$BIN/$cc" GOOS=android GOARCH=$arch GOARM=7
+            ( cd "$LYREBIRD_DIR" && go build -trimpath -ldflags="-s -w -checklinkname=0 -extldflags=-Wl,-z,max-page-size=16384" -o "$GITHUB_WORKSPACE/out/$abi/libobfs4proxy.so" ./cmd/lyrebird )
             ( cd "$CONJURE_DIR" && go build -trimpath -ldflags="-s -w -checklinkname=0 -extldflags=-Wl,-z,max-page-size=16384" -o "$GITHUB_WORKSPACE/out/$abi/libconjure.so" ./client )
             ( cd "$SNOWFLAKE_DIR" && go build -trimpath -ldflags="-s -w -checklinkname=0 -extldflags=-Wl,-z,max-page-size=16384" -o "$GITHUB_WORKSPACE/out/$abi/libsnowflake.so" ./client )
           done
@@ -76,6 +68,7 @@ jobs:
           for abi in arm64-v8a armeabi-v7a x86_64; do
             for lib in libtor libobfs4proxy libconjure libsnowflake; do
               [ -s "out/$abi/$lib.so" ] || { echo "::error::$abi/$lib.so is missing"; exit 1; }
+              readelf -lW "out/$abi/$lib.so" | awk '$1=="LOAD"{print $NF}' | grep -qv 0x4000 && { echo "::error::$abi/$lib.so is not 16 KB aligned"; exit 1; } || true
             done
             chmod +x out/"$abi"/*.so
             ( cd "out/$abi" && zip -q -X "$GITHUB_WORKSPACE/dist/tor-android-$abi.zip" libtor.so libobfs4proxy.so libconjure.so libsnowflake.so )
