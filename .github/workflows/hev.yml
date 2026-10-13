@@ -1,0 +1,63 @@
+name: hev
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/hev.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hev
+  cancel-in-progress: false
+
+env:
+  HEV: "2.18.0"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: hev-socks5-tunnel as the JNI library the Android app loads
+        run: |
+          set -e
+          git clone -q --depth 1 --branch "$HEV" --recursive https://github.com/heiher/hev-socks5-tunnel hev/jni
+          NDK=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)
+          "$NDK/ndk-build" -C hev -j"$(nproc)" APP_ABI="arm64-v8a armeabi-v7a x86_64" APP_MODULES=hev-socks5-tunnel
+          mkdir -p dist
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            so="hev/libs/$abi/libhev-socks5-tunnel.so"
+            readelf -h "$so" | grep -q 'DYN (Shared object file)' || { echo "::error::$abi: hev is not a shared library"; exit 1; }
+            readelf --dyn-syms -W "$so" | grep -qw JNI_OnLoad || { echo "::error::$abi: hev has no JNI_OnLoad"; exit 1; }
+            grep -aq 'hev/htproxy/TProxyService' "$so" || { echo "::error::$abi: hev does not bind hev.htproxy.TProxyService"; exit 1; }
+            ( cd "hev/libs/$abi" && zip -q -X "$GITHUB_WORKSPACE/dist/hev-android-$abi.zip" libhev-socks5-tunnel.so )
+          done
+      - name: The desktop builds from the hev release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          gh release download "$HEV" --repo heiher/hev-socks5-tunnel --dir up --clobber \
+            --pattern "hev-socks5-tunnel-linux-x86_64" --pattern "hev-socks5-tunnel-win64.zip" \
+            --pattern "hev-socks5-tunnel-darwin-arm64" --pattern "hev-socks5-tunnel-darwin-x86_64"
+          cp up/hev-socks5-tunnel-linux-x86_64 dist/hev-linux
+          cp up/hev-socks5-tunnel-darwin-arm64 dist/hev-macos-arm64
+          cp up/hev-socks5-tunnel-darwin-x86_64 dist/hev-macos-x86_64
+          unzip -q -o up/hev-socks5-tunnel-win64.zip -d win64
+          mkdir -p windows
+          for f in hev-socks5-tunnel.exe msys-2.0.dll wintun.dll; do
+            src=$(find win64 -type f -name "$f" | head -1)
+            [ -n "$src" ] || { echo "::error::$f is missing from the hev Windows release"; exit 1; }
+            cp "$src" "windows/$f"
+          done
+          ( cd windows && zip -q -X "$GITHUB_WORKSPACE/dist/hev-windows.zip" ./* )
+          chmod +x dist/hev-linux dist/hev-macos-*
+          ls -l dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/publish.sh "hev-r${{ github.run_number }}" dist

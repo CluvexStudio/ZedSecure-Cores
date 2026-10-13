@@ -1,0 +1,42 @@
+name: psiphon
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - pins.txt
+      - scripts/fetch.sh
+      - .github/workflows/psiphon.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: psiphon
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./scripts/fetch.sh reference/psiphon-tunnel-core
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.3"
+          cache-dependency-path: reference/psiphon-tunnel-core/go.sum
+      - name: The Psiphon console client for every desktop
+        working-directory: reference/psiphon-tunnel-core/ConsoleClient
+        run: |
+          set -e
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          for t in "linux amd64 -linux" "windows amd64 -windows.exe" "darwin arm64 -macos-arm64" "darwin amd64 -macos-x86_64"; do
+            set -- $t
+            CGO_ENABLED=0 GOOS=$1 GOARCH=$2 go build -trimpath -ldflags="-s -w" -o "$GITHUB_WORKSPACE/dist/psiphon$3" .
+          done
+          ls -l "$GITHUB_WORKSPACE/dist"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/publish.sh "psiphon-r${{ github.run_number }}" dist

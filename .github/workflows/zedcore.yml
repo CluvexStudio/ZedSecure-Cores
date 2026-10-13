@@ -1,0 +1,83 @@
+name: zedcore
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - pins.txt
+      - singbox-tags.txt
+      - scripts/fetch.sh
+      - scripts/build-zedcore.sh
+      - .github/workflows/zedcore.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: zedcore
+  cancel-in-progress: false
+
+jobs:
+  aar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Make room
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/node_modules /opt/ghc \
+                      /usr/local/share/boost /usr/share/swift /usr/local/share/powershell \
+                      "$AGENT_TOOLSDIRECTORY/CodeQL" "$AGENT_TOOLSDIRECTORY/PyPy" \
+                      "$AGENT_TOOLSDIRECTORY/Ruby" /usr/local/.ghcup || true
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h / | tail -1
+
+      - uses: actions/checkout@v7
+      - name: Every engine at its pinned commit
+        run: ./scripts/fetch.sh
+      - uses: actions/setup-java@v6
+        with: { distribution: temurin, java-version: "21" }
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.3"
+          cache-dependency-path: vendor/AndroidLibXrayLite/go.sum
+
+      - name: Install an NDK that can link cronet
+        run: |
+          set -e
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;28.2.13676358"
+          newest=$(ls -1 "$ANDROID_HOME/ndk" | sort -V | tail -1)
+          case "$newest" in
+            2[0-7].*) echo "::error::still on NDK $newest; its linker cannot read the cronet archive"; exit 1 ;;
+          esac
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$newest" >> "$GITHUB_ENV"
+          for old in $(ls -1 "$ANDROID_HOME/ndk" | grep -v "^$newest$"); do
+            sudo rm -rf "$ANDROID_HOME/ndk/$old"
+          done
+          echo "building with NDK $newest"
+          df -h / | tail -1
+
+      - name: gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: Build zedcore.aar
+        env:
+          ZEDCORE_TMPDIR: ${{ runner.temp }}/zedcore
+        run: |
+          mkdir -p "$ZEDCORE_TMPDIR"
+          ./scripts/build-zedcore.sh
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            unzip -l out/zedcore.aar | grep -q "jni/$abi/libgojni.so" || { echo "::error::zedcore.aar has no $abi"; exit 1; }
+          done
+          mkdir -p dist && cp out/zedcore.aar dist/
+          ls -l dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/publish.sh "zedcore-r${{ github.run_number }}" dist

@@ -1,0 +1,48 @@
+name: snispoof
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/snispoof.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: snispoof
+  cancel-in-progress: false
+
+env:
+  SNISPOOF: "v0.7.2"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: "1.24", cache: false }
+      - name: SNI-spoof for every ABI
+        run: |
+          set -e
+          NDK=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)
+          BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          git clone -q --depth 1 -b "$SNISPOOF" https://github.com/aleskxyz/SNI-Spoofing-Go.git src
+          mkdir -p dist
+          for triple in "arm64:arm64-v8a:aarch64-linux-android24-clang" \
+                        "arm:armeabi-v7a:armv7a-linux-androideabi24-clang" \
+                        "amd64:x86_64:x86_64-linux-android24-clang"; do
+            arch=${triple%%:*}; rest=${triple#*:}; abi=${rest%%:*}; cc=${rest#*:}
+            mkdir -p "out/$abi"
+            ( cd src && CGO_ENABLED=1 CC="$BIN/$cc" GOOS=android GOARCH=$arch GOARM=7 \
+                go build -trimpath -ldflags="-s -w -extldflags=-Wl,-z,max-page-size=16384" -o "$GITHUB_WORKSPACE/out/$abi/libsnispoof.so" . )
+            chmod +x "out/$abi/libsnispoof.so"
+            ( cd "out/$abi" && zip -q -X "$GITHUB_WORKSPACE/dist/snispoof-android-$abi.zip" libsnispoof.so )
+          done
+          ls -l dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/publish.sh "snispoof-r${{ github.run_number }}" dist

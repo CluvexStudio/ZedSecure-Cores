@@ -1,0 +1,123 @@
+name: tor
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - scripts/build-tor-android.sh
+      - patches/tor-fake-sni.patch
+      - .github/workflows/tor.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tor
+  cancel-in-progress: false
+
+env:
+  ANDROID_BUNDLE: "14.5.1"
+  DESKTOP_BUNDLE: "15.0.24"
+  SNOWFLAKE: "v2.14.1"
+  CONJURE: "v0.0.0-20260113185639-0090962226b8"
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: "1.24", cache: false }
+
+      - name: Tor with fake SNI, from the release and our patch
+        run: |
+          set -e
+          NDK=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)
+          NDK="$NDK" OUT="$PWD/out" WORK="$RUNNER_TEMP/tor-build" ./scripts/build-tor-android.sh
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            so="out/$abi/libtor.so"
+            grep -aq -- '--fake-hosts' "$so" || { echo "::error::$abi tor was built without the fake SNI patch"; exit 1; }
+            readelf -lW "$so" | awk '$1=="LOAD"{print $NF}' | grep -qv 0x4000 && { echo "::error::$abi tor is not 16 KB aligned"; exit 1; } || true
+          done
+
+      - name: lyrebird from the official Android bundle
+        run: |
+          set -e
+          for pair in "aarch64 arm64-v8a" "armv7 armeabi-v7a" "x86_64 x86_64"; do
+            set -- $pair
+            rm -rf teb && mkdir teb
+            curl -fsSL --retry 3 "https://archive.torproject.org/tor-package-archive/torbrowser/${ANDROID_BUNDLE}/tor-expert-bundle-android-$1-${ANDROID_BUNDLE}.tar.gz" | tar -xz -C teb
+            cp teb/tor/pluggable_transports/lyrebird "out/$2/libobfs4proxy.so"
+          done
+
+      - name: Conjure and Snowflake built for every ABI
+        run: |
+          set -e
+          NDK=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)
+          BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          src() { go mod download -json "$1@$2" | python3 -c 'import sys, json; print(json.load(sys.stdin)["Dir"])'; }
+          CONJURE_DIR=$(src gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/conjure "$CONJURE")
+          SNOWFLAKE_DIR=$(src gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2 "$SNOWFLAKE")
+          [ -d "$CONJURE_DIR/client" ] && [ -d "$SNOWFLAKE_DIR/client" ] || { echo "::error::conjure or snowflake did not come through the Go module proxy"; exit 1; }
+          for triple in "arm64:arm64-v8a:aarch64-linux-android24-clang" \
+                        "arm:armeabi-v7a:armv7a-linux-androideabi24-clang" \
+                        "amd64:x86_64:x86_64-linux-android24-clang"; do
+            arch=${triple%%:*}; rest=${triple#*:}; abi=${rest%%:*}; cc=${rest#*:}
+            export CGO_ENABLED=1 CC="$BIN/$cc" GOOS=android GOARCH=$arch GOARM=7
+            ( cd "$CONJURE_DIR" && go build -trimpath -ldflags="-s -w -extldflags=-Wl,-z,max-page-size=16384" -o "$GITHUB_WORKSPACE/out/$abi/libconjure.so" ./client )
+            ( cd "$SNOWFLAKE_DIR" && go build -trimpath -ldflags="-s -w -checklinkname=0 -extldflags=-Wl,-z,max-page-size=16384" -o "$GITHUB_WORKSPACE/out/$abi/libsnowflake.so" ./client )
+          done
+
+      - name: One zip per ABI
+        run: |
+          set -e
+          mkdir -p dist
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            for lib in libtor libobfs4proxy libconjure libsnowflake; do
+              [ -s "out/$abi/$lib.so" ] || { echo "::error::$abi/$lib.so is missing"; exit 1; }
+            done
+            chmod +x out/"$abi"/*.so
+            ( cd "out/$abi" && zip -q -X "$GITHUB_WORKSPACE/dist/tor-android-$abi.zip" libtor.so libobfs4proxy.so libconjure.so libsnowflake.so )
+          done
+          ls -l dist
+      - uses: actions/upload-artifact@v7
+        with: { name: tor-android, path: dist/*, retention-days: 3 }
+
+  desktop:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Tor, lyrebird and Conjure from the official desktop bundles
+        run: |
+          set -e
+          mkdir -p dist
+          for pair in "linux-x86_64 tor-linux" "windows-x86_64 tor-windows" \
+                      "macos-aarch64 tor-macos-arm64" "macos-x86_64 tor-macos-x86_64"; do
+            set -- $pair
+            rm -rf teb "$2" && mkdir teb "$2" "$2/pt"
+            curl -fsSL --retry 3 "https://archive.torproject.org/tor-package-archive/torbrowser/${DESKTOP_BUNDLE}/tor-expert-bundle-$1-${DESKTOP_BUNDLE}.tar.gz" | tar -xz -C teb
+            find teb/tor -maxdepth 1 -type f -exec cp {} "$2/" \;
+            for pt in lyrebird lyrebird.exe conjure-client conjure-client.exe; do
+              [ -f "teb/tor/pluggable_transports/$pt" ] && cp "teb/tor/pluggable_transports/$pt" "$2/pt/"
+            done
+            cp teb/data/geoip teb/data/geoip6 "$2/"
+            ls "$2" | grep -q -E '^tor(\.exe)?$' || { echo "::error::$1 has no tor binary"; exit 1; }
+            ls "$2/pt" | grep -q -E '^lyrebird(\.exe)?$' || { echo "::error::$1 has no lyrebird"; exit 1; }
+            chmod +x "$2"/* "$2"/pt/* 2>/dev/null || true
+            ( cd "$2" && zip -q -r -X "$GITHUB_WORKSPACE/dist/$2.zip" . )
+          done
+          ls -l dist
+      - uses: actions/upload-artifact@v7
+        with: { name: tor-desktop, path: dist/*, retention-days: 3 }
+
+  publish:
+    needs: [android, desktop]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with: { path: dist, merge-multiple: true }
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/publish.sh "tor-r${{ github.run_number }}" dist

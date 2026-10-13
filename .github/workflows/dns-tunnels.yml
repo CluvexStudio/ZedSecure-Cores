@@ -1,0 +1,46 @@
+name: dns-tunnels
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - pins.txt
+      - scripts/fetch.sh
+      - .github/workflows/dns-tunnels.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dns-tunnels
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./scripts/fetch.sh vendor/AndroidLibXrayLite reference/vaydns reference/MasterDnsVPN
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.3"
+          cache-dependency-path: |
+            vendor/AndroidLibXrayLite/zeddns/go.sum
+            reference/MasterDnsVPN/go.sum
+      - name: zeddns and the MasterDNS client for every desktop
+        run: |
+          set -e
+          mkdir -p dist
+          for t in "linux amd64 -linux" "windows amd64 -windows.exe" "darwin arm64 -macos-arm64" "darwin amd64 -macos-x86_64"; do
+            set -- $t
+            (cd vendor/AndroidLibXrayLite/zeddns && CGO_ENABLED=0 GOOS=$1 GOARCH=$2 \
+              go build -trimpath -ldflags="-s -w" -o "$GITHUB_WORKSPACE/dist/zeddns$3" ./cmd/zeddns)
+            (cd reference/MasterDnsVPN && CGO_ENABLED=0 GOOS=$1 GOARCH=$2 \
+              go build -trimpath -ldflags="-s -w" -o "$GITHUB_WORKSPACE/dist/masterdns$3" ./cmd/client)
+          done
+          ls -l dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/publish.sh "dns-tunnels-r${{ github.run_number }}" dist
