@@ -28,7 +28,7 @@ jobs:
       - run: ./scripts/fetch.sh vendor/xray-core reference/amneziawg-go reference/sing-openvpn
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26.3"
+          go-version: "1.27.3"
           cache-dependency-path: vendor/xray-core/go.sum
       - name: Xray with every protocol for Linux and Windows, plus cronet
         working-directory: vendor/xray-core
@@ -63,7 +63,7 @@ jobs:
       - run: ./scripts/fetch.sh vendor/xray-core reference/amneziawg-go reference/sing-openvpn
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.26.3"
+          go-version: "1.27.3"
           cache-dependency-path: vendor/xray-core/go.sum
       - name: Xray with every protocol for macOS, cronet linked in
         working-directory: vendor/xray-core
