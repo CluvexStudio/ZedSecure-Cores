@@ -1,5 +1,5 @@
 vendor/AndroidLibXrayLite       https://github.com/CluvexStudio/AndroidLibXrayLite.git    b55323a6a9021edb7186967f2014c20cdca319ef
-vendor/xray-core                https://github.com/CluvexStudio/Xray-core.git             a1560cee8c03a074010a39bfd75ea72866f649a3
+vendor/xray-core                https://github.com/CluvexStudio/Xray-core.git             789ed4c1ed108ac8dea529886251a16c146f9b45
 vendor/qpack-patched            https://github.com/CluvexStudio/qpack.git                 9442fc625d9485b450bc7f4c0e314b3648a0c4d4
 reference/psiphon-tunnel-core   https://github.com/CluvexStudio/psiphon-tunnel-core.git   83aa73b9b982e7421e00117f5b0c5aceb5dda452
 reference/sing-openvpn          https://github.com/CluvexStudio/sing-openvpn.git          4da12b6b7accc99388da20a7fd6c8e1e0976a3dd
