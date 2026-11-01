@@ -1,0 +1,11 @@
+--- a/common.go
++++ b/common.go
+@@ -332,6 +332,8 @@
+ 	// are a server, or if we received a HelloRetryRequest if we are a client.
+ 	HelloRetryRequest bool
+ 
++	LocalCertificate [][]byte
++
+ 	// ekm is a closure exposed via ExportKeyingMaterial.
+ 	ekm func(label string, context []byte, length int) ([]byte, error)
+ 

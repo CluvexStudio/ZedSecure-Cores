@@ -53,6 +53,18 @@ RAW="$ROOT/out/zedcore-raw.aar"
 OUT="$ROOT/out/zedcore.aar"
 mkdir -p "$ROOT/out"
 
+PTLS_MODULE="github.com/Psiphon-Labs/psiphon-tls"
+PTLS_VERSION="$(grep -m1 "^[[:space:]]*$PTLS_MODULE " "$ROOT/vendor/AndroidLibXrayLite/go.mod" | awk '{print $2}')"
+[ -n "$PTLS_VERSION" ] || { echo "no $PTLS_MODULE in AndroidLibXrayLite/go.mod" >&2; exit 1; }
+PTLS_SRC="$(cd "$TMPDIR" && go mod download -json "$PTLS_MODULE@$PTLS_VERSION" | sed -n 's/^[[:space:]]*"Dir": "\(.*\)",$/\1/p')"
+[ -d "$PTLS_SRC" ] || { echo "could not download $PTLS_MODULE@$PTLS_VERSION" >&2; exit 1; }
+PTLS_DIR="$ROOT/reference/psiphon-tls"
+rm -rf "$PTLS_DIR"
+cp -r "$PTLS_SRC" "$PTLS_DIR"
+chmod -R u+w "$PTLS_DIR"
+patch -d "$PTLS_DIR" -p1 --no-backup-if-mismatch < "$ROOT/patches/psiphon-tls-go1.27.patch"
+( cd "$ROOT/vendor/AndroidLibXrayLite" && go mod edit -replace "$PTLS_MODULE=../../reference/psiphon-tls" )
+
 echo ">>> gomobile bind (Xray + sing-box + Psiphon + DNSTT + VayDNS + MasterDNS) with $(go version)"
 cd "$ROOT/vendor/AndroidLibXrayLite"
 gomobile bind -v -x -trimpath -androidapi "$ANDROID_API" -target="$TARGETS" -tags="$SINGBOX_TAGS" -ldflags="$LDFLAGS" -o "$RAW" \

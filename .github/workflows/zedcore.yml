@@ -9,6 +9,7 @@ on:
       - singbox-tags.txt
       - scripts/fetch.sh
       - scripts/build-zedcore.sh
+      - patches/psiphon-tls-go1.27.patch
       - .github/workflows/zedcore.yml
 
 permissions:
