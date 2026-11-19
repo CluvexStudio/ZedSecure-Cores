@@ -72,7 +72,6 @@ jobs:
       - name: Build zedcore.aar
         env:
           ZEDCORE_TMPDIR: ${{ runner.temp }}/zedcore
-          ZEDCORE_CLEAN_CACHE: "1"
         run: |
           mkdir -p "$ZEDCORE_TMPDIR"
           ./scripts/build-zedcore.sh

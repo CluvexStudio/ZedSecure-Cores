@@ -49,11 +49,9 @@ LDFLAGS="$LDFLAGS -X github.com/sagernet/sing-box/constant.Version=$SINGBOX_VERS
 
 SINGBOX_TAGS="$(paste -sd, "$ROOT/singbox-tags.txt")"
 
-TARGETS="${TARGETS:-android/arm64,android/arm,android/amd64}"
-NAIVELESS_TARGETS="${NAIVELESS_TARGETS-android/386}"
+TARGETS="${TARGETS:-android/arm64,android/arm,android/386,android/amd64}"
 
 RAW="$ROOT/out/zedcore-raw.aar"
-RAW_NAIVELESS="$ROOT/out/zedcore-naiveless-raw.aar"
 OUT="$ROOT/out/zedcore.aar"
 mkdir -p "$ROOT/out"
 
@@ -81,32 +79,10 @@ echo ">>> gomobile bind (Xray + sing-box + Psiphon + DNSTT + VayDNS + MasterDNS)
 cd "$ROOT/vendor/AndroidLibXrayLite"
 gomobile bind -v -x -trimpath -androidapi "$ANDROID_API" -target="$TARGETS" -tags="$SINGBOX_TAGS" -ldflags="$LDFLAGS" -o "$RAW" "${PACKAGES[@]}"
 
-if [ -n "$NAIVELESS_TARGETS" ]; then
-  NAIVELESS_TAGS="$(grep -vx with_naive_outbound "$ROOT/singbox-tags.txt" | paste -sd,)"
-  if [ "${ZEDCORE_CLEAN_CACHE:-0}" = 1 ]; then go clean -cache; fi
-  echo ">>> gomobile bind for $NAIVELESS_TARGETS without the naive outbound, since cronet has no build there"
-  gomobile bind -v -x -trimpath -androidapi "$ANDROID_API" -target="$NAIVELESS_TARGETS" -tags="$NAIVELESS_TAGS" -ldflags="$LDFLAGS" -o "$RAW_NAIVELESS" "${PACKAGES[@]}"
-fi
-
 echo ">>> inject ca.psiphon.PsiphonTunnel"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 unzip -o "$RAW" -d "$WORK/psi" >/dev/null
-
-if [ -n "$NAIVELESS_TARGETS" ]; then
-  echo ">>> merge the $NAIVELESS_TARGETS libraries"
-  unzip -o "$RAW_NAIVELESS" -d "$WORK/naiveless" >/dev/null
-  mkdir -p "$WORK/api/main" "$WORK/api/naiveless"
-  ( cd "$WORK/api/main" && "$JAVA_HOME/bin/jar" xf "$WORK/psi/classes.jar" )
-  ( cd "$WORK/api/naiveless" && "$JAVA_HOME/bin/jar" xf "$WORK/naiveless/classes.jar" )
-  rm -rf "$WORK/api/main/META-INF" "$WORK/api/naiveless/META-INF"
-  diff -rq "$WORK/api/main" "$WORK/api/naiveless" || { echo "the $NAIVELESS_TARGETS build exposes a different Java API" >&2; exit 1; }
-  for so in "$WORK"/naiveless/jni/*/libgojni.so; do
-    abi="$(basename "$(dirname "$so")")"
-    mkdir -p "$WORK/psi/jni/$abi"
-    cp "$so" "$WORK/psi/jni/$abi/libgojni.so"
-  done
-fi
 
 "$JAVA_HOME/bin/javac" -d "$WORK" -bootclasspath "$ANDROID_JAR" -source 1.8 -target 1.8 \
   -classpath "$WORK/psi/classes.jar" "$PSI_DIR/PsiphonTunnel/PsiphonTunnel.java"
@@ -124,6 +100,6 @@ printf -- '-keep class psi.** { *; }\n-keep class ca.psiphon.** { *; }\n-keep cl
 rm -f "$OUT.tmp"
 ( cd "$WORK/psi" && zip -r "$OUT.tmp" ./ >/dev/null )
 mv -f "$OUT.tmp" "$OUT"
-rm -f "$RAW" "$RAW_NAIVELESS"
+rm -f "$RAW"
 echo ">>> wrote $OUT"
 ls -la "$OUT"
