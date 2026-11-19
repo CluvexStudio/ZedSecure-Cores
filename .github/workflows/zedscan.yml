@@ -1,0 +1,138 @@
+name: zedscan
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/zedscan.yml
+      - zedscan/**
+
+permissions:
+  contents: write
+
+concurrency:
+  group: zedscan
+  cancel-in-progress: false
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: The scanner as the JNI library the Android app loads
+        working-directory: zedscan
+        run: |
+          set -e
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          cargo install cargo-ndk --locked
+          export ANDROID_NDK_HOME=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 --platform 24 -o out build --release
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          for t in aarch64-linux-android:arm64-v8a armv7-linux-androideabi:armeabi-v7a x86_64-linux-android:x86_64; do
+            cp "target/${t%%:*}/release/zedscan" "out/${t##*:}/libzedscan_cli.so"
+          done
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            so="out/$abi/libzedscan.so"
+            aligns=$(readelf -lW "$so" | awk '/LOAD/{print $NF}' | sort -u)
+            if echo "$aligns" | grep -qv '^0x4000$'; then echo "::error::$abi is not 16 KB aligned"; exit 1; fi
+            if readelf -d "$so" | grep -qE '\(RELR\)|0x0*6fffe000 '; then echo "::error::$abi uses RELR relocations, which Android 7 and 8 cannot load"; exit 1; fi
+            n=$(nm -D --defined-only "$so" | grep -c 'Java_dev_cluvex_zedsecure_scan_ZedScanNative_' || true)
+            if [ "$n" -lt 5 ]; then echo "::error::$abi exports $n JNI functions"; exit 1; fi
+            if readelf -d "out/$abi/libzedscan_cli.so" | grep -qE '\(RELR\)|0x0*6fffe000 '; then echo "::error::$abi cli uses RELR"; exit 1; fi
+            ( cd "out/$abi" && zip -q -X "$GITHUB_WORKSPACE/dist/zedscan-android-$abi.zip" libzedscan.so libzedscan_cli.so )
+          done
+          ls -l "$GITHUB_WORKSPACE/dist"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zedscan-android
+          path: dist/*
+          retention-days: 3
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: The scanner for Linux, linked against glibc 2.17
+        run: |
+          set -e
+          docker run --rm -v "$PWD:/w" -w /w/zedscan quay.io/pypa/manylinux2014_x86_64 bash -c '
+            set -e
+            curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal >/dev/null
+            . "$HOME/.cargo/env"
+            cargo build --release --lib
+          '
+          so=zedscan/target/release/libzedscan.so
+          echo "newest glibc symbol: $(objdump -T "$so" | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1)"
+          n=$(nm -D --defined-only "$so" | grep -c 'Java_dev_cluvex_zedsecure_scan_ZedScanNative_' || true)
+          if [ "$n" -lt 5 ]; then echo "::error::linux exports $n JNI functions"; exit 1; fi
+          mkdir -p dist
+          cp "$so" dist/libzedscan-linux.so
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zedscan-linux
+          path: dist/*
+          retention-days: 3
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: The scanner for Windows with the C runtime linked in
+        working-directory: zedscan
+        shell: bash
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+        run: |
+          set -e
+          cargo build --release --lib
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp target/release/zedscan.dll "$GITHUB_WORKSPACE/dist/zedscan-windows.dll"
+          ls -l "$GITHUB_WORKSPACE/dist"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zedscan-windows
+          path: dist/*
+          retention-days: 3
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-26, arch: arm64 }
+          - { runner: macos-26-intel, arch: x86_64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: The scanner for macOS
+        working-directory: zedscan
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+        run: |
+          set -e
+          cargo build --release --lib
+          lib=target/release/libzedscan.dylib
+          file "$lib"
+          minos=$(otool -l "$lib" | awk '/LC_BUILD_VERSION/{f=1} f&&$1=="minos"{print $2; exit}')
+          echo "minimum macOS: $minos"
+          [ "$minos" = "12.0" ] || { echo "::error::zedscan needs macOS $minos, not 12.0"; exit 1; }
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$lib" "$GITHUB_WORKSPACE/dist/libzedscan-macos-${{ matrix.arch }}.dylib"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: "zedscan-macos-${{ matrix.arch }}"
+          path: dist/*
+          retention-days: 3
+
+  publish:
+    needs: [android, linux, windows, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with: { path: dist, merge-multiple: true }
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/publish.sh "zedscan-r${{ github.run_number }}" dist

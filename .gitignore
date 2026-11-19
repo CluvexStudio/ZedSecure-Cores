@@ -3,3 +3,6 @@
 /out/
 /work/
 /dist/
+/zedscan/target/
+/zedscan/dev/
+/zedscan/Cargo.lock.bak
