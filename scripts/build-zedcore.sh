@@ -44,6 +44,8 @@ echo ">>> android.jar=$ANDROID_JAR"
 
 export CGO_LDFLAGS="-Wl,-z,max-page-size=16384,-z,common-page-size=16384"
 LDFLAGS="-checklinkname=0 -s -w -X runtime.godebugDefault=multipathtcp=0,tlssha1=1 -extldflags=-Wl,-z,max-page-size=16384,-z,common-page-size=16384"
+SINGBOX_VERSION="$(cd "$ROOT/vendor/AndroidLibXrayLite" && go list -m -f '{{.Version}}' github.com/sagernet/sing-box | sed 's/^v//')"
+LDFLAGS="$LDFLAGS -X github.com/sagernet/sing-box/constant.Version=$SINGBOX_VERSION"
 
 SINGBOX_TAGS="$(paste -sd, "$ROOT/singbox-tags.txt")"
 

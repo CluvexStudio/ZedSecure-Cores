@@ -37,6 +37,7 @@ jobs:
           out="$GITHUB_WORKSPACE/dist"
           mkdir -p "$out"
           TAGS="$(paste -sd, "$GITHUB_WORKSPACE/singbox-tags.txt"),with_purego"
+          LDFLAGS="$LDFLAGS -X github.com/sagernet/sing-box/constant.Version=$(go list -m -f '{{.Version}}' github.com/sagernet/sing-box | sed 's/^v//')"
           CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -trimpath -tags "$TAGS" -ldflags="$LDFLAGS" -o "$out/xray-linux"       ./main
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags "$TAGS" -ldflags="$LDFLAGS" -o "$out/xray-windows.exe" ./main
           go mod download github.com/sagernet/cronet-go/lib/linux_amd64 github.com/sagernet/cronet-go/lib/windows_amd64
@@ -77,6 +78,7 @@ jobs:
           bin="$out/xray-macos-${{ matrix.arch }}"
           mkdir -p "$out"
           TAGS="$(paste -sd, "$GITHUB_WORKSPACE/singbox-tags.txt")"
+          LDFLAGS="$LDFLAGS -X github.com/sagernet/sing-box/constant.Version=$(go list -m -f '{{.Version}}' github.com/sagernet/sing-box | sed 's/^v//')"
           CGO_ENABLED=1 go build -trimpath -tags "$TAGS" -ldflags="$LDFLAGS" -o "$bin" ./main
           file "$bin"
           minos=$(otool -l "$bin" | awk '/LC_BUILD_VERSION/{f=1} f&&$1=="minos"{print $2; exit}')
