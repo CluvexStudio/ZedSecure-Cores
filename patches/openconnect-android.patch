@@ -1,0 +1,152 @@
+diff --git a/android/Makefile b/android/Makefile
+index 7953e44..e216e4d 100644
+--- a/android/Makefile
++++ b/android/Makefile
+@@ -314,6 +314,7 @@ endif
+ 
+ $(OC_SYSROOT)/lib/liblz4.a: $(OC_SYSROOT) $(LZ4_DIR)/Makefile
+ 	$(MAKE) -C $(LZ4_DIR)/lib \
++		PREFIX=$(OC_SYSROOT) \
+ 		LIBDIR=$(OC_SYSROOT)/lib \
+ 		INCLUDEDIR=$(OC_SYSROOT)/include \
+ 		CFLAGS="$(EXTRA_CFLAGS) $(LZ4_EXTRA_CFLAGS)" \
+diff --git a/java/src/org/infradead/libopenconnect/LibOpenConnect.java b/java/src/org/infradead/libopenconnect/LibOpenConnect.java
+index d139317..9c6460c 100644
+--- a/java/src/org/infradead/libopenconnect/LibOpenConnect.java
++++ b/java/src/org/infradead/libopenconnect/LibOpenConnect.java
+@@ -34,6 +34,8 @@ public abstract class LibOpenConnect {
+ 	public static final int OC_FORM_OPT_SELECT = 3;
+ 	public static final int OC_FORM_OPT_HIDDEN = 4;
+ 	public static final int OC_FORM_OPT_TOKEN = 5;
++	public static final int OC_FORM_OPT_SSO_TOKEN = 6;
++	public static final int OC_FORM_OPT_SSO_USER = 7;
+ 
+ 	public static final int OC_FORM_OPT_IGNORE = 0x0001;
+ 	public static final int OC_FORM_OPT_NUMERIC = 0x0002;
+@@ -72,6 +74,8 @@ public abstract class LibOpenConnect {
+ 	public void onSetupTun() { }
+ 	public void onReconnected() { }
+ 
++	public int onOpenWebview(String uri) { return -1; }
++
+ 	/* create/destroy library instances */
+ 
+ 	public LibOpenConnect() {
+@@ -141,6 +145,7 @@ public abstract class LibOpenConnect {
+ 	public synchronized native void setLocalName(String localName);
+ 	public synchronized native void setCAFile(String caFile);
+ 	public synchronized native void setReportedOS(String os);
++	public synchronized native int webviewLoadChanged(String uri, String[] cookies, String[] headers);
+ 	public synchronized native void setMobileInfo(String mobilePlatformVersion,
+ 						      String mobileDeviceType,
+ 						      String mobileDeviceUniqueID);
+diff --git a/jni.c b/jni.c
+index 112080c..07bd226 100644
+--- a/jni.c
++++ b/jni.c
+@@ -219,6 +219,97 @@ out:
+ 	return ret;
+ }
+ 
++static int open_webview_cb(struct openconnect_info *vpninfo, const char *uri, void *privdata)
++{
++	struct libctx *ctx = privdata;
++	jstring juri;
++	int ret = -1;
++	jmethodID mid;
++
++	(void)vpninfo;
++
++	if ((*ctx->jenv)->PushLocalFrame(ctx->jenv, 256) < 0)
++		return -1;
++
++	juri = dup_to_jstring(ctx->jenv, uri);
++	if (!juri)
++		goto out;
++
++	mid = get_obj_mid(ctx, ctx->jobj, "onOpenWebview", "(Ljava/lang/String;)I");
++	if (mid)
++		ret = (*ctx->jenv)->CallIntMethod(ctx->jenv, ctx->jobj, mid, juri);
++
++out:
++	(*ctx->jenv)->PopLocalFrame(ctx->jenv, NULL);
++	return ret;
++}
++
++static const char **jstr_array_dup(JNIEnv *jenv, jobjectArray jarr)
++{
++	jsize n, i;
++	const char **out;
++
++	if (!jarr)
++		return NULL;
++	n = (*jenv)->GetArrayLength(jenv, jarr);
++	out = calloc((size_t)n + 1, sizeof(*out));
++	if (!out)
++		return NULL;
++	for (i = 0; i < n; i++) {
++		jstring js = (*jenv)->GetObjectArrayElement(jenv, jarr, i);
++		const char *cs = js ? (*jenv)->GetStringUTFChars(jenv, js, NULL) : NULL;
++		out[i] = strdup(cs ? cs : "");
++		if (js) {
++			if (cs)
++				(*jenv)->ReleaseStringUTFChars(jenv, js, cs);
++			(*jenv)->DeleteLocalRef(jenv, js);
++		}
++	}
++	out[n] = NULL;
++	return out;
++}
++
++static void jstr_array_free(const char **arr)
++{
++	int i;
++
++	if (!arr)
++		return;
++	for (i = 0; arr[i]; i++)
++		free((void *)arr[i]);
++	free((void *)arr);
++}
++
++JNIEXPORT jint JNICALL Java_org_infradead_libopenconnect_LibOpenConnect_webviewLoadChanged(
++	JNIEnv *jenv, jobject jobj, jstring juri, jobjectArray jcookies, jobjectArray jheaders)
++{
++	struct libctx *ctx = getctx(jenv, jobj);
++	struct oc_webview_result result;
++	const char *uri = NULL;
++	const char **cookies, **headers;
++	int ret;
++
++	if (!ctx)
++		return -1;
++	if (get_cstring(ctx->jenv, juri, &uri))
++		return -1;
++
++	cookies = jstr_array_dup(ctx->jenv, jcookies);
++	headers = jstr_array_dup(ctx->jenv, jheaders);
++
++	memset(&result, 0, sizeof(result));
++	result.uri = uri;
++	result.cookies = cookies;
++	result.headers = headers;
++
++	ret = openconnect_webview_load_changed(ctx->vpninfo, &result);
++
++	jstr_array_free(cookies);
++	jstr_array_free(headers);
++	release_cstring(ctx->jenv, juri, uri);
++	return ret;
++}
++
+ static int write_new_config_cb(void *privdata, const char *buf, int buflen)
+ {
+ 	struct libctx *ctx = privdata;
+@@ -643,6 +734,7 @@ JNIEXPORT jlong JNICALL Java_org_infradead_libopenconnect_LibOpenConnect_init(
+ 	openconnect_set_stats_handler(ctx->vpninfo, stats_cb);
+ 	openconnect_set_setup_tun_handler(ctx->vpninfo, setup_tun_cb);
+ 	openconnect_set_reconnected_handler(ctx->vpninfo, reconnected_cb);
++	openconnect_set_webview_callback(ctx->vpninfo, open_webview_cb);
+ 
+ 	ctx->cmd_fd = openconnect_setup_cmd_pipe(ctx->vpninfo);
+ 	if (ctx->cmd_fd < 0)

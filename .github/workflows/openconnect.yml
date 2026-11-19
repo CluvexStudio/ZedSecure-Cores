@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/openconnect.yml
+      - patches/openconnect-android.patch
 
 permissions:
   contents: write
@@ -17,6 +18,7 @@ concurrency:
 env:
   OPENCONNECT: "9.21"
   OPENCONNECT_SHA256: "5b32369467db6e5f317aa1ed12cfcbb81ed00bdbc765450b6bfcbdc300944a58"
+  OPENCONNECT_ANDROID_COMMIT: "70d1e79d1e55849dfc71dcc199b1edb535b547e4"
 
 jobs:
   windows:
@@ -64,8 +66,58 @@ jobs:
       - uses: actions/upload-artifact@v7
         with: { name: openconnect-windows, path: dist/*, retention-days: 3 }
 
+  android:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: arm64, abi: arm64-v8a, triplet: aarch64-linux-android }
+          - { arch: arm, abi: armeabi-v7a, triplet: armv7a-linux-androideabi }
+          - { arch: x86_64, abi: x86_64, triplet: x86_64-linux-android }
+    steps:
+      - uses: actions/checkout@v7
+      - name: OpenConnect as the JNI library the Android app loads
+        run: |
+          set -eu
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends autoconf automake libtool pkg-config gettext gperf bison make gcc python3 file zip
+          NDK=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)
+          bin="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          printf 'int main(void){return 0;}\n' > /tmp/probe.c
+          "$bin/${{ matrix.triplet }}24-clang" /tmp/probe.c -o /tmp/probe
+          git init -q oc
+          cd oc
+          git remote add origin https://gitlab.com/openconnect/openconnect.git
+          git fetch -q --depth 1 origin "$OPENCONNECT_ANDROID_COMMIT"
+          git checkout -q FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$OPENCONNECT_ANDROID_COMMIT"
+          git apply "$GITHUB_WORKSPACE/patches/openconnect-android.patch"
+          ./autogen.sh
+          make -C android ARCH=${{ matrix.arch }} NDK="$NDK" API_LEVEL=24 \
+            EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384,-z,common-page-size=16384" -j"$(nproc)" openconnect
+          so=$(find android/${{ matrix.triplet }}/out -name 'libopenconnect.so*' -type f | head -1)
+          test -n "$so"
+          aligns=$(readelf -lW "$so" | awk '/LOAD/{print $NF}' | sort -u)
+          echo "$aligns"
+          if echo "$aligns" | grep -qv '^0x4000$'; then echo "::error::libopenconnect.so is not 16 KB aligned"; exit 1; fi
+          n=$(nm -D --defined-only "$so" | grep -c 'Java_org_infradead_libopenconnect_LibOpenConnect_' || true)
+          echo "JNI symbols: $n"
+          if [ "$n" -lt 78 ]; then echo "::error::JNI symbols missing"; exit 1; fi
+          nm -D --defined-only "$so" | grep -q 'LibOpenConnect_webviewLoadChanged' || { echo "::error::the webview binding is missing"; exit 1; }
+          mkdir -p lib "$GITHUB_WORKSPACE/dist"
+          cp "$so" lib/libopenconnect.so
+          "$bin/llvm-strip" --strip-unneeded lib/libopenconnect.so
+          ( cd lib && zip -q -X "$GITHUB_WORKSPACE/dist/openconnect-android-${{ matrix.abi }}.zip" libopenconnect.so )
+          ls -l "$GITHUB_WORKSPACE/dist"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openconnect-android-${{ matrix.abi }}
+          path: dist/*
+          retention-days: 3
+
   publish:
-    needs: windows
+    needs: [windows, android]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
