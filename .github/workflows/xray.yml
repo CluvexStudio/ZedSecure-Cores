@@ -30,7 +30,7 @@ jobs:
         with:
           go-version: "1.27.3"
           cache-dependency-path: vendor/xray-core/go.sum
-      - name: Xray with every protocol for Linux and Windows, plus cronet
+      - name: Xray with every protocol for Linux and Windows on x86_64 and ARM64, plus cronet
         working-directory: vendor/xray-core
         run: |
           set -e
@@ -40,12 +40,17 @@ jobs:
           LDFLAGS="$LDFLAGS -X github.com/sagernet/sing-box/constant.Version=$(go list -m -f '{{.Version}}' github.com/sagernet/sing-box | sed 's/^v//')"
           CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -trimpath -tags "$TAGS" -ldflags="$LDFLAGS" -o "$out/xray-linux"       ./main
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags "$TAGS" -ldflags="$LDFLAGS" -o "$out/xray-windows.exe" ./main
-          go mod download github.com/sagernet/cronet-go/lib/linux_amd64 github.com/sagernet/cronet-go/lib/windows_amd64
+          CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -trimpath -tags "$TAGS" -ldflags="$LDFLAGS" -o "$out/xray-linux-arm64"       ./main
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -tags "$TAGS" -ldflags="$LDFLAGS" -o "$out/xray-windows-arm64.exe" ./main
+          go mod download github.com/sagernet/cronet-go/lib/linux_amd64 github.com/sagernet/cronet-go/lib/windows_amd64 github.com/sagernet/cronet-go/lib/linux_arm64
           lin=$(go list -m -f '{{.Dir}}' github.com/sagernet/cronet-go/lib/linux_amd64)
           win=$(go list -m -f '{{.Dir}}' github.com/sagernet/cronet-go/lib/windows_amd64)
-          [ -n "$lin" ] && [ -n "$win" ] || { echo "::error::cronet modules did not resolve"; exit 1; }
+          lin64=$(go list -m -f '{{.Dir}}' github.com/sagernet/cronet-go/lib/linux_arm64)
+          [ -n "$lin" ] && [ -n "$win" ] && [ -n "$lin64" ] || { echo "::error::cronet modules did not resolve"; exit 1; }
           cp "$lin/libcronet.so"  "$out/"
           cp "$win/libcronet.dll" "$out/"
+          cp "$lin64/libcronet.so" "$out/libcronet-linux-arm64.so"
+          file "$out/xray-linux-arm64" "$out/libcronet-linux-arm64.so" | grep -c aarch64 | grep -qx 2 || { echo "::error::the Linux ARM64 build is not ARM64"; exit 1; }
           "$out/xray-linux" version | head -1
           ls -l "$out"
       - uses: actions/upload-artifact@v7

@@ -50,13 +50,19 @@ jobs:
           retention-days: 3
 
   linux:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, image: manylinux2014_x86_64, name: libzedscan-linux.so }
+          - { runner: ubuntu-24.04-arm, image: manylinux2014_aarch64, name: libzedscan-linux-arm64.so }
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
       - name: The scanner for Linux, linked against glibc 2.17
         run: |
           set -e
-          docker run --rm -v "$PWD:/w" -w /w/zedscan quay.io/pypa/manylinux2014_x86_64 bash -c '
+          docker run --rm -v "$PWD:/w" -w /w/zedscan quay.io/pypa/${{ matrix.image }} bash -c '
             set -e
             curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal >/dev/null
             . "$HOME/.cargo/env"
@@ -66,15 +72,22 @@ jobs:
           echo "newest glibc symbol: $(objdump -T "$so" | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1)"
           n=$(nm -D --defined-only "$so" | grep -c 'Java_dev_cluvex_zedsecure_scan_ZedScanNative_' || true)
           if [ "$n" -lt 5 ]; then echo "::error::linux exports $n JNI functions"; exit 1; fi
+          file "$so"
           mkdir -p dist
-          cp "$so" dist/libzedscan-linux.so
+          cp "$so" "dist/${{ matrix.name }}"
       - uses: actions/upload-artifact@v7
         with:
-          name: zedscan-linux
+          name: zedscan-${{ matrix.image }}
           path: dist/*
           retention-days: 3
 
   windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-pc-windows-msvc, name: zedscan-windows.dll }
+          - { target: aarch64-pc-windows-msvc, name: zedscan-windows-arm64.dll }
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -85,13 +98,15 @@ jobs:
           RUSTFLAGS: "-C target-feature=+crt-static"
         run: |
           set -e
-          cargo build --release --lib
+          export PATH="/c/Program Files/LLVM/bin:$PATH"
+          rustup target add ${{ matrix.target }}
+          cargo build --release --lib --target ${{ matrix.target }}
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp target/release/zedscan.dll "$GITHUB_WORKSPACE/dist/zedscan-windows.dll"
+          cp target/${{ matrix.target }}/release/zedscan.dll "$GITHUB_WORKSPACE/dist/${{ matrix.name }}"
           ls -l "$GITHUB_WORKSPACE/dist"
       - uses: actions/upload-artifact@v7
         with:
-          name: zedscan-windows
+          name: zedscan-${{ matrix.target }}
           path: dist/*
           retention-days: 3
 

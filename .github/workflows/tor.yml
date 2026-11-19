@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - scripts/build-tor-android.sh
+      - scripts/build-tor-linux.sh
       - patches/tor-fake-sni.patch
       - .github/workflows/tor.yml
 
@@ -104,8 +105,41 @@ jobs:
       - uses: actions/upload-artifact@v7
         with: { name: tor-desktop, path: dist/*, retention-days: 3 }
 
+  desktop-linux-arm64:
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: "1.24", cache: false }
+      - name: Tor, lyrebird and Conjure for Linux ARM64, which has no official bundle
+        run: |
+          set -e
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends build-essential perl pkg-config file zip
+          OUT="$PWD/tor-linux-arm64" WORK="$RUNNER_TEMP/tor-linux" ./scripts/build-tor-linux.sh
+          mkdir -p tor-linux-arm64/pt
+          src() { go mod download -json "$1@$2" | python3 -c 'import sys, json; print(json.load(sys.stdin)["Dir"])'; }
+          LYREBIRD_DIR=$(src gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird "$LYREBIRD")
+          CONJURE_DIR=$(src gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/conjure "$CONJURE")
+          ( cd "$LYREBIRD_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0" -o "$GITHUB_WORKSPACE/tor-linux-arm64/pt/lyrebird" ./cmd/lyrebird )
+          ( cd "$CONJURE_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0" -o "$GITHUB_WORKSPACE/tor-linux-arm64/pt/conjure-client" ./client )
+          rm -rf teb && mkdir teb
+          curl -fsSL --retry 3 "https://archive.torproject.org/tor-package-archive/torbrowser/${DESKTOP_BUNDLE}/tor-expert-bundle-linux-x86_64-${DESKTOP_BUNDLE}.tar.gz" | tar -xz -C teb
+          cp teb/data/geoip teb/data/geoip6 tor-linux-arm64/
+          file tor-linux-arm64/tor tor-linux-arm64/pt/lyrebird tor-linux-arm64/pt/conjure-client > types.txt
+          cat types.txt
+          [ "$(grep -c aarch64 types.txt)" = 3 ] || { echo "::error::a Linux ARM64 Tor file is not an ARM64 binary"; exit 1; }
+          ./tor-linux-arm64/tor --version
+          ldd tor-linux-arm64/tor || true
+          chmod +x tor-linux-arm64/tor tor-linux-arm64/pt/*
+          mkdir -p dist
+          ( cd tor-linux-arm64 && zip -q -r -X "$GITHUB_WORKSPACE/dist/tor-linux-arm64.zip" . )
+          ls -l dist
+      - uses: actions/upload-artifact@v7
+        with: { name: tor-desktop-linux-arm64, path: dist/*, retention-days: 3 }
+
   publish:
-    needs: [android, desktop]
+    needs: [android, desktop, desktop-linux-arm64]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

@@ -32,7 +32,8 @@ jobs:
         run: |
           set -e
           mkdir -p dist
-          for t in "linux amd64 -linux" "windows amd64 -windows.exe" "darwin arm64 -macos-arm64" "darwin amd64 -macos-x86_64"; do
+          for t in "linux amd64 -linux" "linux arm64 -linux-arm64" "windows amd64 -windows.exe" "windows arm64 -windows-arm64.exe" \
+                   "darwin arm64 -macos-arm64" "darwin amd64 -macos-x86_64"; do
             set -- $t
             (cd vendor/AndroidLibXrayLite/zeddns && CGO_ENABLED=0 GOOS=$1 GOARCH=$2 \
               go build -trimpath -ldflags="-s -w" -o "$GITHUB_WORKSPACE/dist/zeddns$3" ./cmd/zeddns)

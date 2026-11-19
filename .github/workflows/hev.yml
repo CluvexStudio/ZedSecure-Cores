@@ -16,6 +16,7 @@ concurrency:
 
 env:
   HEV: "2.18.0"
+  HEV_WINDOWS_ARM64: "2.20.0"
 
 jobs:
   build:
@@ -43,9 +44,10 @@ jobs:
         run: |
           set -e
           gh release download "$HEV" --repo heiher/hev-socks5-tunnel --dir up --clobber \
-            --pattern "hev-socks5-tunnel-linux-x86_64" --pattern "hev-socks5-tunnel-win64.zip" \
+            --pattern "hev-socks5-tunnel-linux-x86_64" --pattern "hev-socks5-tunnel-linux-arm64" --pattern "hev-socks5-tunnel-win64.zip" \
             --pattern "hev-socks5-tunnel-darwin-arm64" --pattern "hev-socks5-tunnel-darwin-x86_64"
           cp up/hev-socks5-tunnel-linux-x86_64 dist/hev-linux
+          cp up/hev-socks5-tunnel-linux-arm64 dist/hev-linux-arm64
           cp up/hev-socks5-tunnel-darwin-arm64 dist/hev-macos-arm64
           cp up/hev-socks5-tunnel-darwin-x86_64 dist/hev-macos-x86_64
           unzip -q -o up/hev-socks5-tunnel-win64.zip -d win64
@@ -56,7 +58,18 @@ jobs:
             cp "$src" "windows/$f"
           done
           ( cd windows && zip -q -X "$GITHUB_WORKSPACE/dist/hev-windows.zip" ./* )
-          chmod +x dist/hev-linux dist/hev-macos-*
+          gh release download "$HEV_WINDOWS_ARM64" --repo heiher/hev-socks5-tunnel --dir up-arm64 --clobber \
+            --pattern "hev-socks5-tunnel-win-arm64.zip"
+          unzip -q -o up-arm64/hev-socks5-tunnel-win-arm64.zip -d win-arm64 || [ $? -eq 1 ]
+          mkdir -p windows-arm64
+          for f in hev-socks5-tunnel.exe wintun.dll; do
+            src=$(find win-arm64 -type f -name "$f" | head -1)
+            [ -n "$src" ] || { echo "::error::$f is missing from the hev Windows ARM64 release"; exit 1; }
+            file "$src" | grep -qE 'ARM64|Aarch64' || { echo "::error::$f in the Windows ARM64 release is not an ARM64 binary"; exit 1; }
+            cp "$src" "windows-arm64/$f"
+          done
+          ( cd windows-arm64 && zip -q -X "$GITHUB_WORKSPACE/dist/hev-windows-arm64.zip" ./* )
+          chmod +x dist/hev-linux dist/hev-linux-arm64 dist/hev-macos-*
           ls -l dist
       - name: Publish
         env:
