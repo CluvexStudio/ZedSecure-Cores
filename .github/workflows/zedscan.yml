@@ -24,15 +24,15 @@ jobs:
         working-directory: zedscan
         run: |
           set -e
-          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
           cargo install cargo-ndk --locked
           export ANDROID_NDK_HOME=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)
-          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 --platform 24 -o out build --release
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 --platform 24 -o out build --release
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          for t in aarch64-linux-android:arm64-v8a armv7-linux-androideabi:armeabi-v7a x86_64-linux-android:x86_64; do
+          for t in aarch64-linux-android:arm64-v8a armv7-linux-androideabi:armeabi-v7a i686-linux-android:x86 x86_64-linux-android:x86_64; do
             cp "target/${t%%:*}/release/zedscan" "out/${t##*:}/libzedscan_cli.so"
           done
-          for abi in arm64-v8a armeabi-v7a x86_64; do
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
             so="out/$abi/libzedscan.so"
             aligns=$(readelf -lW "$so" | awk '/LOAD/{print $NF}' | sort -u)
             if echo "$aligns" | grep -qv '^0x4000$'; then echo "::error::$abi is not 16 KB aligned"; exit 1; fi

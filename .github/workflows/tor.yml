@@ -35,7 +35,7 @@ jobs:
           set -e
           NDK=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)
           NDK="$NDK" OUT="$PWD/out" WORK="$RUNNER_TEMP/tor-build" ./scripts/build-tor-android.sh
-          for abi in arm64-v8a armeabi-v7a x86_64; do
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
             so="out/$abi/libtor.so"
             grep -aq -- '--fake-hosts' "$so" || { echo "::error::$abi tor was built without the fake SNI patch"; exit 1; }
             readelf -lW "$so" | awk '$1=="LOAD"{print $NF}' | grep -qv 0x4000 && { echo "::error::$abi tor is not 16 KB aligned"; exit 1; } || true
@@ -53,6 +53,7 @@ jobs:
           [ -d "$LYREBIRD_DIR/cmd/lyrebird" ] && [ -d "$CONJURE_DIR/client" ] && [ -d "$SNOWFLAKE_DIR/client" ] || { echo "::error::a transport did not come through the Go module proxy"; exit 1; }
           for triple in "arm64:arm64-v8a:aarch64-linux-android24-clang" \
                         "arm:armeabi-v7a:armv7a-linux-androideabi24-clang" \
+                        "386:x86:i686-linux-android24-clang" \
                         "amd64:x86_64:x86_64-linux-android24-clang"; do
             arch=${triple%%:*}; rest=${triple#*:}; abi=${rest%%:*}; cc=${rest#*:}
             export CGO_ENABLED=1 CC="$BIN/$cc" GOOS=android GOARCH=$arch GOARM=7
@@ -65,7 +66,7 @@ jobs:
         run: |
           set -e
           mkdir -p dist
-          for abi in arm64-v8a armeabi-v7a x86_64; do
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
             for lib in libtor libobfs4proxy libconjure libsnowflake; do
               [ -s "out/$abi/$lib.so" ] || { echo "::error::$abi/$lib.so is missing"; exit 1; }
               readelf -lW "out/$abi/$lib.so" | awk '$1=="LOAD"{print $NF}' | grep -qv 0x4000 && { echo "::error::$abi/$lib.so is not 16 KB aligned"; exit 1; } || true

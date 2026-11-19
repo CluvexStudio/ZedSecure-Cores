@@ -6,7 +6,7 @@ TOR_VERSION="${TOR_VERSION:-0.4.9.13}"
 OPENSSL_VERSION="${OPENSSL_VERSION:-3.6.5}"
 LIBEVENT_VERSION="${LIBEVENT_VERSION:-2.1.12-stable}"
 API="${API:-24}"
-ABIS="${ABIS:-arm64-v8a armeabi-v7a x86_64}"
+ABIS="${ABIS:-arm64-v8a armeabi-v7a x86 x86_64}"
 OUT="${OUT:-$ROOT/out/tor-android}"
 WORK="${WORK:-$ROOT/work/tor-android}"
 NDK="${NDK:?set NDK to an Android NDK}"
@@ -28,6 +28,7 @@ for abi in $ABIS; do
   case "$abi" in
     arm64-v8a) ossl=android-arm64; host=aarch64-linux-android; cc=aarch64-linux-android$API-clang ;;
     armeabi-v7a) ossl=android-arm; host=arm-linux-androideabi; cc=armv7a-linux-androideabi$API-clang ;;
+    x86) ossl=android-x86; host=i686-linux-android; cc=i686-linux-android$API-clang ;;
     x86_64) ossl=android-x86_64; host=x86_64-linux-android; cc=x86_64-linux-android$API-clang ;;
     *) echo "unknown ABI $abi" >&2; exit 1 ;;
   esac

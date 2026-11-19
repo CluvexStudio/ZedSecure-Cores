@@ -33,6 +33,7 @@ jobs:
           mkdir -p dist
           for triple in "arm64:arm64-v8a:aarch64-linux-android24-clang" \
                         "arm:armeabi-v7a:armv7a-linux-androideabi24-clang" \
+                        "386:x86:i686-linux-android24-clang" \
                         "amd64:x86_64:x86_64-linux-android24-clang"; do
             arch=${triple%%:*}; rest=${triple#*:}; abi=${rest%%:*}; cc=${rest#*:}
             mkdir -p "out/$abi"
